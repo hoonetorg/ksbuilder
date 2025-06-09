@@ -17,13 +17,13 @@ python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fa-i
 or for the Kinoite ISO
 
 ```
-python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fa-inst_sb_42_1disk.img --kickstart ks_fa_1disk.cfg --version "fedora/42/x86_64/kinoite" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
+python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fa-inst_kinoite_42_1disk.img --kickstart ks_fa_1disk.cfg --version "fedora/42/x86_64/kinoite" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
 ```
 
 or for the Cosmic ISO
 
 ```
-python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fa-inst_sb_42_1disk.img --kickstart ks_fa_1disk.cfg --version "fedora/42/x86_64/cosmic-atomic" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
+python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fa-inst_cosmic_42_1disk.img --kickstart ks_fa_1disk.cfg --version "fedora/42/x86_64/cosmic-atomic" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
 ```
 
 some notes on arguments
