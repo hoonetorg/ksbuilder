@@ -1,0 +1,2 @@
+ksfiles/*
+!ksfiles/ks*.cfg
