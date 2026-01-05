@@ -1,0 +1,300 @@
+#!/usr/bin/env -S python3 -u
+import logging
+
+import os
+import sys
+import subprocess
+import shlex
+import shutil
+
+from pathlib import Path
+
+import pwd
+import grp
+
+import json
+
+APPNAME = "ksbuilder"
+WORKSPACE = Path(f"/{APPNAME}")
+
+KSFILESDIRPATH = "/srv/ksbuilder/ksfiles"
+OUTPUTDIRPATH = "/srv/ksbuilder/output"
+# GLOBALCONF = "/srv/ksbuilder/ksbuilder.json"
+HOSTCONF = "/srv/ksbuilder/host.json"
+
+
+def subprocess_run_wrapper(
+    cmd: str, dryrun: bool = False, **kwargs
+) -> subprocess.CompletedProcess | None:
+    if kwargs.get("shell"):
+        wcmd = cmd
+    else:
+        wcmd = shlex.split(cmd)
+
+    if dryrun:
+        logging.info(f"[DRYRUN] {cmd}")
+        return None
+
+    logging.info(f"[EXECUTING] {cmd}")
+    return subprocess.run(wcmd, **kwargs)
+
+
+def get_path(path):
+    return Path(path).expanduser().absolute()
+
+
+def is_readable_file(file: Path) -> bool:
+    return file.exists() and file.is_file() and os.access(file, os.R_OK)
+
+
+def get_size_mib(folder):
+    total = 0
+    for dirpath, _, files in os.walk(folder):
+        for f in files:
+            total += os.path.getsize(os.path.join(dirpath, f))
+    return max(64, (total // (1024**2)) + 50)
+
+
+def patch_inst_stage2(file_path, old_label, new_label):
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = f.read()
+    patched = data.replace(
+        f"inst.stage2=hd:LABEL={old_label}",
+        f"inst.stage2=hd:LABEL={new_label} inst.ks=hd:LABEL={new_label}:/ks.cfg",
+    )
+    # Optionally, handle cases where spaces or quotes are around the label
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(patched)
+
+
+def ensure_clean_dir(p: Path) -> None:
+    if p.exists():
+        logging.info(f"Cleaning dir {shlex.quote(str(p))}")
+        shutil.rmtree(p)
+    logging.info(f"Creating dir {shlex.quote(str(p))}")
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def replace_token(text: str, token: str, value) -> None:
+    if value is None:
+        return
+    return text.replace(f"{{{{{token}}}}}", str(value))
+
+def main():
+    dryrun = False
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
+    ksfilesdir = get_path(KSFILESDIRPATH)
+    outputdir = get_path(OUTPUTDIRPATH)
+
+    logging.info(f"outputdir: {shlex.quote(str(outputdir))}")
+
+    # 0
+    root_uid = pwd.getpwnam("root").pw_uid
+    root_gid = grp.getgrnam("root").gr_gid
+
+    for d in [outputdir]:
+        if d.exists():
+            os.chown(d, root_uid, root_gid)
+            d.chmod(0o755)
+        else:
+            logging.info(f"[WARN] Directory does not exist: {shlex.quote(str(d))}")
+
+    # globalconffile = get_path(GLOBALCONF)
+    # if not is_readable_file(file=globalconffile):
+    #    logging.error(
+    #        f"Config file not found or not readable: {shlex.quote(str(globalconffile))}"
+    #    )
+    #    sys.exit(1)
+    # logging.info(f"globalconffile: {shlex.quote(str(globalconffile))}")
+    # globalconf = json.loads(globalconffile.read_text(encoding="utf-8"))
+    # logging.info(f"globalconf:\n{json.dumps(globalconf, indent=2)}")
+
+    hostconffile = get_path(HOSTCONF)
+    if not is_readable_file(file=hostconffile):
+        logging.error(
+            f"Config file not found or not readable: {shlex.quote(str(hostconffile))}"
+        )
+        sys.exit(1)
+    logging.info(f"hostconffile: {shlex.quote(str(hostconffile))}")
+    hostconf = json.loads(hostconffile.read_text(encoding="utf-8"))
+    logging.info(f"hostconf:\n{json.dumps(hostconf, indent=2)}")
+
+    ksfile = Path(hostconf["ksfile"])
+    version = str(hostconf["version"])
+    username = str(hostconf["username"])
+    userpw = str(hostconf["userpw"])
+    disklayoutid = str(hostconf["disklayoutid"])
+    diskpath = Path(hostconf["diskpath"])
+    startpartition = int(hostconf.get("startpartition", int(-1)))
+    rootsizemib = int(hostconf["rootsizemib"])
+    outfile = Path(hostconf["outfile"])
+
+    outfilefull = outputdir / outfile
+
+    if outfilefull.is_file():
+        logging.info(
+            f"IMG already exists: {shlex.quote(str(outfilefull))} - refusing to overwrite."
+        )
+        return
+
+    logging.info(f"Building KS IMG {shlex.quote(str(outfilefull))}")
+
+    logging.info("hostconf:")
+    logging.info(f"ksfile: {shlex.quote(str(ksfile))}")
+    logging.info(f"username: {str(username)}")
+    logging.info("userpw: hidden")
+    logging.info(f"disklayoutid: {shlex.quote(str(disklayoutid))}")
+    logging.info(f"diskpath: {shlex.quote(str(diskpath))}")
+    logging.info(f"startpartition: {int(startpartition)}")
+    logging.info(f"rootsizemib: {int(rootsizemib)}")
+    logging.info(f"outfile: {shlex.quote(str(outfile))}")
+
+    label = "OEMDRV"
+
+    content_dir = WORKSPACE / "content"
+    image_path = WORKSPACE / "image"
+    patched_ks_path = WORKSPACE / "patched_ks.cfg"
+
+    ensure_clean_dir(p=content_dir)
+    ensure_clean_dir(p=image_path)
+
+    ks_src = ksfilesdir / ksfile
+    if not is_readable_file(file=ks_src):
+        logging.error(
+            f"Kickstart file not found or not readable: {shlex.quote(str(ks_src))}"
+        )
+        sys.exit(1)
+
+    ks_data = ks_src.read_text(encoding="utf-8")
+
+    ks_data = replace_token(text=ks_data, token="version", value=version or None)
+    ks_data = replace_token(
+        text=ks_data, token="disklayoutid", value=disklayoutid or None
+    )
+    ks_data = replace_token(
+        text=ks_data, token="diskpath", value=diskpath if diskpath else None
+    )
+    ks_data = replace_token(
+        text=ks_data,
+        token="startpartition",
+        value=int(startpartition) if startpartition is not None else None,
+    )
+    ks_data = replace_token(
+        text=ks_data,
+        token="rootsizemib",
+        value=int(rootsizemib) if rootsizemib is not None else None,
+    )
+    ks_data = replace_token(text=ks_data, token="username", value=username or None)
+    ks_data = replace_token(text=ks_data, token="userpw", value=userpw or None)
+
+    patched_ks_path.write_text(ks_data, encoding="utf-8")
+    ks_to_copy = patched_ks_path
+
+    extra_dir = ks_src.parent / f"{ks_src.name}.d"
+    if extra_dir.is_dir():
+        subprocess_run_wrapper(
+            cmd=(
+                "rsync -aH "
+                f"{shlex.quote(str(extra_dir))}/ "
+                f"{shlex.quote(str(content_dir))}/"
+            ),
+            dryrun=dryrun,
+            check=True,
+        )
+
+    image_size_mib = get_size_mib(str(content_dir))
+
+    img_path = outfilefull
+    img_path.parent.mkdir(parents=True, exist_ok=True)
+
+    subprocess_run_wrapper(
+        cmd=(
+            "qemu-img create -f raw "
+            f"{shlex.quote(str(img_path))} "
+            f"{int(image_size_mib)}M"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+    subprocess_run_wrapper(
+        cmd=(
+            "parted --script "
+            f"{shlex.quote(str(img_path))} "
+            "mklabel gpt "
+            "mkpart primary fat32 1MiB 100%"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+
+    loopdev = None
+    try:
+        cp = subprocess_run_wrapper(
+            cmd=f"losetup --show -fP {shlex.quote(str(img_path))}",
+            dryrun=dryrun,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if cp is None:
+            raise RuntimeError("losetup returned no output (dry-run?)")
+        loopdev = cp.stdout.strip()
+
+        subprocess_run_wrapper(
+            cmd=f"kpartx -av {shlex.quote(loopdev)}",
+            dryrun=dryrun,
+            check=True,
+        )
+
+        part1 = Path("/dev/mapper") / f"{Path(loopdev).name}p1"
+        subprocess_run_wrapper(
+            cmd=(
+                "mkfs.vfat -F 32 "
+                f"-n {shlex.quote(label)} "
+                f"{shlex.quote(str(part1))}"
+            ),
+            dryrun=dryrun,
+            check=True,
+        )
+
+        subprocess_run_wrapper(
+            cmd=(
+                "mount " f"{shlex.quote(str(part1))} " f"{shlex.quote(str(image_path))}"
+            ),
+            dryrun=dryrun,
+            check=True,
+        )
+
+        subprocess_run_wrapper(
+            cmd=(
+                "rsync -aH "
+                f"{shlex.quote(str(content_dir))}/ "
+                f"{shlex.quote(str(image_path))}/"
+            ),
+            dryrun=dryrun,
+            check=True,
+        )
+
+        shutil.copy2(str(ks_to_copy), str(image_path / "ks.cfg"))
+        logging.info("Copied Kickstart to image root")
+
+    finally:
+        if image_path.exists() and os.path.ismount(str(image_path)):
+            subprocess_run_wrapper(
+                cmd=f"umount {shlex.quote(str(image_path))}", dryrun=dryrun
+            )
+        if loopdev:
+            subprocess_run_wrapper(
+                cmd=f"kpartx -d {shlex.quote(loopdev)}", dryrun=dryrun
+            )
+            subprocess_run_wrapper(
+                cmd=f"losetup -d {shlex.quote(loopdev)}", dryrun=dryrun
+            )
+
+    logging.info(f"Bootable USB image created: {shlex.quote(str(img_path))}")
+
+
+if __name__ == "__main__":
+    main()

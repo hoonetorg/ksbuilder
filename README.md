@@ -11,25 +11,25 @@ with `sha256sum`
 run
 
 ```
-python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fa-inst_sb_42_1disk.img --kickstart ks_fa_1disk.cfg --version "fedora/42/x86_64/silverblue" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
+python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output answerdisk_fedoraatomic_sb_42_singleboot.img --kickstart ksfile_fa_singleboot.cfg --version "fedora/42/x86_64/silverblue" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
 ```
 
 or for the Kinoite ISO
 
 ```
-python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fa-inst_kinoite_42_1disk.img --kickstart ks_fa_1disk.cfg --version "fedora/42/x86_64/kinoite" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
+python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output answerdisk_fedoraatomic_kinoite_42_singleboot.img --kickstart ksfile_fa_singleboot.cfg --version "fedora/42/x86_64/kinoite" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
 ```
 
 or for the Cosmic ISO
 
 ```
-python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fa-inst_cosmic_42_1disk.img --kickstart ks_fa_1disk.cfg --version "fedora/42/x86_64/cosmic-atomic" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
+python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output answerdisk_fedoraatomic_cosmic_42_singleboot.img --kickstart ksfile_fa_singleboot.cfg --version "fedora/42/x86_64/cosmic-atomic" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
 ```
 
 or for the Fedora Everything netinstall iso
 
 ```
-python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output ad_fws-inst_42_1disk.img --kickstart ks_fws_1disk.cfg --version "fedora/42/x86_64" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
+python3 cksbuilder.py --workdir /home/johndoe/ksbuilder/ksfiles --output answerdisk_fedoraworkstation-inst_42_singleboot.img --kickstart ksfile_fedoraworkstation_singleboot.cfg --version "fedora/42/x86_64" --diskpath "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0-0-0-0" --rootsizemib 20480 --user hoo --userpwhash '$y$j...'
 ```
 
 

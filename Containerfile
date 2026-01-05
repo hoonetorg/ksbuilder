@@ -12,9 +12,11 @@ RUN dnf -y install \
     findutils \
     && dnf clean all
 
-COPY src/ksbuilder.py /usr/local/bin/
+RUN mkdir -p /ksbuilder
+WORKDIR /ksbuilder
 
-WORKDIR /workspace
+COPY src/ksbuilder /usr/local/bin/
+RUN chmod +x /usr/local/bin/ksbuilder
 
 # Default entrypoint (can override)
-ENTRYPOINT ["python3", "/usr/local/bin/ksbuilder.py"]
+ENTRYPOINT ["/usr/local/bin/ksbuilder"]

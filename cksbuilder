@@ -1,0 +1,178 @@
+#!/usr/bin/env -S python3 -u
+
+import argparse
+
+import logging
+
+from pathlib import Path
+import os
+import sys
+import subprocess
+import shlex
+
+import json
+
+
+APPNAME = "ksbuilder"
+IMAGENAME = APPNAME
+CONTAINERFILE = "Containerfile"
+WORKSPACE = Path(f"/{APPNAME}")
+
+
+def subprocess_run_wrapper(
+    cmd: str, dryrun: bool = False, **kwargs
+) -> subprocess.CompletedProcess | None:
+    if kwargs.get("shell"):
+        wcmd = cmd
+    else:
+        wcmd = shlex.split(cmd)
+
+    if dryrun:
+        logging.info(f"[DRYRUN] {cmd}")
+        return None
+
+    logging.info(f"[EXECUTING] {cmd}")
+    return subprocess.run(wcmd, **kwargs)
+
+
+def get_path(path: str) -> Path:
+    return Path(path).expanduser().absolute()
+
+
+def is_readable_file(file: Path) -> bool:
+    return file.exists() and file.is_file() and os.access(file, os.R_OK)
+
+
+def build_image(sourcedir: Path, dryrun: bool = False):
+    subprocess_run_wrapper(
+        cmd=(
+            "podman build "
+            f"-t {shlex.quote(IMAGENAME)} "
+            f"-f {shlex.quote(str(sourcedir / Path(CONTAINERFILE)))}"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+def build(
+    interactive: bool,
+    globalconffile: Path,
+    hostconffile: Path,
+    ksfilesdir: Path,
+    outputdir: Path,
+    args: list,
+    dryrun: bool = False,
+):
+    ctrargs = "--rm "
+    if interactive:
+        ctrargs += "-it --entrypoint /bin/bash "
+
+    subprocess_run_wrapper(
+        cmd=(
+            "podman "
+            "run "
+            "--pids-limit=-1 "
+            f"--name {shlex.quote(str(IMAGENAME))} "
+            "--privileged "
+            f"{ctrargs}"
+            f"-w {shlex.quote(str(WORKSPACE))} "
+            f"-v {shlex.quote(str(globalconffile))}:/srv/ksbuilder/ksbuilder.json:ro,z "
+            f"-v {shlex.quote(str(hostconffile))}:/srv/ksbuilder/host.json:ro,z "
+            f"-v {shlex.quote(str(ksfilesdir))}:/srv/ksbuilder/ksfiles:z "
+            f"-v {shlex.quote(str(outputdir))}:/srv/ksbuilder/output:z "
+            f"{shlex.quote(str(IMAGENAME))} "
+            f"{' '.join(shlex.quote(a) for a in args)}"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+if __name__ == "__main__":
+    dryrun = False
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
+    parser = argparse.ArgumentParser(
+        description="Build and run Container building a bootable USB image with kickstart file"
+    )
+    parser.add_argument(
+        "--build", action="store_true", help=f"Build {IMAGENAME} container"
+    )
+    parser.add_argument(
+        "--sourcedir",
+        type=str,
+        default=".",
+        help="sourcedir for building container (default '.')",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Run container in interactive mode with /bin/bash",
+    )
+    parser.add_argument(
+        "--globalconffile",
+        type=str,
+        default=f"./{APPNAME}.json",
+        help=f"{APPNAME} config file (default './{APPNAME}.json')",
+    )
+    parser.add_argument(
+        "--hostconffile",
+        type=str,
+        default="./host.json",
+        help="Host config file (default './host.json')",
+    )
+
+    args, passthrough = parser.parse_known_args()
+
+    sourcedir = get_path(args.sourcedir)
+
+    logging.info(f"sourcedir: {shlex.quote(str(sourcedir))}")
+
+    if args.build:
+        build_image(sourcedir=sourcedir, dryrun=dryrun)
+        sys.exit(0)
+
+    globalconffile = get_path(args.globalconffile)
+    if not is_readable_file(file=globalconffile):
+        logging.error(
+            f"Config file not found or not readable: {shlex.quote(str(globalconffile))}"
+        )
+        sys.exit(1)
+    logging.info(f"globalconffile: {shlex.quote(str(globalconffile))}")
+    globalconf = json.loads(globalconffile.read_text(encoding="utf-8"))
+    logging.info(f"globalconf:\n{json.dumps(globalconf, indent=2)}")
+
+    hostconffile = get_path(args.hostconffile)
+    if not is_readable_file(file=hostconffile):
+        logging.error(
+            f"Config file not found or not readable: {shlex.quote(str(hostconffile))}"
+        )
+        sys.exit(1)
+    logging.info(f"hostconffile: {shlex.quote(str(hostconffile))}")
+    hostconf = json.loads(hostconffile.read_text(encoding="utf-8"))
+    logging.info(f"hostconf:\n{json.dumps(hostconf, indent=2)}")
+
+    ksfilesdir = get_path(globalconf["ksfilesdir"])
+    outputdir = get_path(globalconf["outputdir"])
+
+    outfile = Path(hostconf["outfile"])
+
+    logging.info(f"ksfilesdir: {shlex.quote(str(ksfilesdir))}")
+    logging.info(f"outputdir: {shlex.quote(str(outputdir))}")
+    logging.info(f"outfile: {shlex.quote(str(outfile))}")
+
+    build(
+        interactive=args.interactive,
+        globalconffile=globalconffile,
+        hostconffile=hostconffile,
+        ksfilesdir=ksfilesdir,
+        outputdir=outputdir,
+        args=passthrough,
+        dryrun=dryrun,
+    )
+
+    outfilefull = outputdir / outfile
+    logging.info(
+        f"If KS IMG build was successfull IMG file can be found under {shlex.quote(str(outfilefull))}"
+    )
