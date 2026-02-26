@@ -5,12 +5,13 @@ RUN dnf -y install \
     parted \
     kpartx \
     dosfstools \
+    e2fsprogs \
+    btrfs-progs \
     util-linux \
     rsync \
-    bsdtar \
-    python3 \
-    findutils \
-    && dnf clean all
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
 
 RUN mkdir -p /ksbuilder
 WORKDIR /ksbuilder
