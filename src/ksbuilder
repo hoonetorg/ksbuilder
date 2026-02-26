@@ -18,6 +18,7 @@ APPNAME = "ksbuilder"
 WORKSPACE = Path(f"/{APPNAME}")
 
 KSFILESDIRPATH = "/srv/ksbuilder/ksfiles"
+EXTRAFILESDIRPATH = "/srv/ksbuilder/extrafiles"
 OUTPUTDIRPATH = "/srv/ksbuilder/output"
 # GLOBALCONF = "/srv/ksbuilder/ksbuilder.json"
 HOSTCONF = "/srv/ksbuilder/host.json"
@@ -80,14 +81,20 @@ def replace_token(text: str, token: str, value) -> None:
         return
     return text.replace(f"{{{{{token}}}}}", str(value))
 
+
 def main():
     dryrun = False
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
     ksfilesdir = get_path(KSFILESDIRPATH)
+    extrafilesdir = get_path(EXTRAFILESDIRPATH)
     outputdir = get_path(OUTPUTDIRPATH)
 
+    logging.info(f"ksfilesdir: {shlex.quote(str(ksfilesdir))}")
+    logging.info(f"extrafilesdir: {shlex.quote(str(extrafilesdir))}")
     logging.info(f"outputdir: {shlex.quote(str(outputdir))}")
+
+    extrafilesdir.mkdir(parents=True, exist_ok=True)
 
     # 0
     root_uid = pwd.getpwnam("root").pw_uid
@@ -132,6 +139,10 @@ def main():
 
     outfilefull = outputdir / outfile
 
+    oemlabel = "OEMDRV"
+    extralabel = "EXTRA"
+    extrafs = "btrfs"
+
     if outfilefull.is_file():
         logging.info(
             f"IMG already exists: {shlex.quote(str(outfilefull))} - refusing to overwrite."
@@ -149,15 +160,17 @@ def main():
     logging.info(f"startpartition: {int(startpartition)}")
     logging.info(f"rootsizemib: {int(rootsizemib)}")
     logging.info(f"outfile: {shlex.quote(str(outfile))}")
+    logging.info(f"oemlabel: {shlex.quote(str(oemlabel))}")
+    logging.info(f"extrafilesdir: {shlex.quote(str(extrafilesdir))}")
+    logging.info(f"extralabel: {shlex.quote(str(extralabel))}")
+    logging.info(f"extrafs: {shlex.quote(str(extrafs))}")
 
-    label = "OEMDRV"
-
-    content_dir = WORKSPACE / "content"
-    image_path = WORKSPACE / "image"
+    oem_path = WORKSPACE / "oem"
+    extra_path = WORKSPACE / "extra"
     patched_ks_path = WORKSPACE / "patched_ks.cfg"
 
-    ensure_clean_dir(p=content_dir)
-    ensure_clean_dir(p=image_path)
+    ensure_clean_dir(p=oem_path)
+    ensure_clean_dir(p=extra_path)
 
     ks_src = ksfilesdir / ksfile
     if not is_readable_file(file=ks_src):
@@ -191,27 +204,25 @@ def main():
     patched_ks_path.write_text(ks_data, encoding="utf-8")
     ks_to_copy = patched_ks_path
 
-    extra_dir = ks_src.parent / f"{ks_src.name}.d"
-    if extra_dir.is_dir():
-        subprocess_run_wrapper(
-            cmd=(
-                "rsync -aH "
-                f"{shlex.quote(str(extra_dir))}/ "
-                f"{shlex.quote(str(content_dir))}/"
-            ),
-            dryrun=dryrun,
-            check=True,
-        )
+    # oem_size_mib = get_size_mib(str(content_dir))
+    oem_size_mib = 256
+    oem_begin_mib = 1
+    oem_end_mib = oem_begin_mib + oem_size_mib
+    extra_size_mib = get_size_mib(str(extrafilesdir))
+    image_size_mib = oem_end_mib + (extra_size_mib * 2)
 
-    image_size_mib = get_size_mib(str(content_dir))
+    logging.info(f"oem_size_mib: {oem_size_mib}")
+    logging.info(f"oem_begin_mib: {oem_begin_mib}")
+    logging.info(f"oem_end_mib: {oem_end_mib}")
+    logging.info(f"extra_size_mib: {extra_size_mib}")
+    logging.info(f"image_size_mib: {image_size_mib}")
 
-    img_path = outfilefull
-    img_path.parent.mkdir(parents=True, exist_ok=True)
+    outfilefull.parent.mkdir(parents=True, exist_ok=True)
 
     subprocess_run_wrapper(
         cmd=(
             "qemu-img create -f raw "
-            f"{shlex.quote(str(img_path))} "
+            f"{shlex.quote(str(outfilefull))} "
             f"{int(image_size_mib)}M"
         ),
         dryrun=dryrun,
@@ -220,9 +231,10 @@ def main():
     subprocess_run_wrapper(
         cmd=(
             "parted --script "
-            f"{shlex.quote(str(img_path))} "
+            f"{shlex.quote(str(outfilefull))} "
             "mklabel gpt "
-            "mkpart primary fat32 1MiB 100%"
+            f"mkpart primary fat32 {oem_begin_mib}MiB {oem_end_mib}MiB "
+            f"mkpart primary {extrafs} {oem_end_mib}MiB 100%"
         ),
         dryrun=dryrun,
         check=True,
@@ -231,7 +243,7 @@ def main():
     loopdev = None
     try:
         cp = subprocess_run_wrapper(
-            cmd=f"losetup --show -fP {shlex.quote(str(img_path))}",
+            cmd=f"losetup --show -fP {shlex.quote(str(outfilefull))}",
             dryrun=dryrun,
             check=True,
             stdout=subprocess.PIPE,
@@ -249,10 +261,11 @@ def main():
         )
 
         part1 = Path("/dev/mapper") / f"{Path(loopdev).name}p1"
+        part2 = Path("/dev/mapper") / f"{Path(loopdev).name}p2"
         subprocess_run_wrapper(
             cmd=(
                 "mkfs.vfat -F 32 "
-                f"-n {shlex.quote(label)} "
+                f"-n {shlex.quote(oemlabel)} "
                 f"{shlex.quote(str(part1))}"
             ),
             dryrun=dryrun,
@@ -261,7 +274,9 @@ def main():
 
         subprocess_run_wrapper(
             cmd=(
-                "mount " f"{shlex.quote(str(part1))} " f"{shlex.quote(str(image_path))}"
+                "mkfs.btrfs --data single --metadata dup "
+                f"-L {shlex.quote(extralabel)} "
+                f"{shlex.quote(str(part2))}"
             ),
             dryrun=dryrun,
             check=True,
@@ -269,21 +284,46 @@ def main():
 
         subprocess_run_wrapper(
             cmd=(
-                "rsync -aH "
-                f"{shlex.quote(str(content_dir))}/ "
-                f"{shlex.quote(str(image_path))}/"
+                "mount " f"{shlex.quote(str(part1))} " f"{shlex.quote(str(oem_path))}"
             ),
             dryrun=dryrun,
             check=True,
         )
 
-        shutil.copy2(str(ks_to_copy), str(image_path / "ks.cfg"))
-        logging.info("Copied Kickstart to image root")
+        subprocess_run_wrapper(
+            cmd=(
+                "mount " f"{shlex.quote(str(part2))} " f"{shlex.quote(str(extra_path))}"
+            ),
+            dryrun=dryrun,
+            check=True,
+        )
+
+        shutil.copy2(str(ks_to_copy), str(oem_path / "ks.cfg"))
+        logging.info("Copied Kickstart to oem root")
+
+        extra_path.mkdir(parents=True, exist_ok=True)
+        subprocess_run_wrapper(
+            cmd=(
+                "rsync -aH --delete "
+                f"{shlex.quote(str(Path(extrafilesdir).absolute()))}/ "
+                f"{shlex.quote(str(extra_path.absolute()))}/"
+            ),
+            dryrun=dryrun,
+            check=True,
+        )
+
+        logging.info(
+            f"Copied extra files to {shlex.quote(str(extra_path.absolute()))}/"
+        )
 
     finally:
-        if image_path.exists() and os.path.ismount(str(image_path)):
+        if oem_path.exists() and os.path.ismount(str(oem_path)):
             subprocess_run_wrapper(
-                cmd=f"umount {shlex.quote(str(image_path))}", dryrun=dryrun
+                cmd=f"umount {shlex.quote(str(oem_path))}", dryrun=dryrun
+            )
+        if extra_path.exists() and os.path.ismount(str(extra_path)):
+            subprocess_run_wrapper(
+                cmd=f"umount {shlex.quote(str(extra_path))}", dryrun=dryrun
             )
         if loopdev:
             subprocess_run_wrapper(
@@ -293,7 +333,7 @@ def main():
                 cmd=f"losetup -d {shlex.quote(loopdev)}", dryrun=dryrun
             )
 
-    logging.info(f"Bootable USB image created: {shlex.quote(str(img_path))}")
+    logging.info(f"Ksbuilder image created: {shlex.quote(str(outfilefull))}")
 
 
 if __name__ == "__main__":

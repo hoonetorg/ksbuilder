@@ -60,6 +60,7 @@ def build(
     globalconffile: Path,
     hostconffile: Path,
     ksfilesdir: Path,
+    extrafilesdir: Path | None,
     outputdir: Path,
     args: list,
     dryrun: bool = False,
@@ -68,22 +69,27 @@ def build(
     if interactive:
         ctrargs += "-it --entrypoint /bin/bash "
 
+    cmd = (
+        "podman "
+        "run "
+        "--pids-limit=-1 "
+        f"--name {shlex.quote(str(IMAGENAME))} "
+        "--privileged "
+        f"{ctrargs}"
+        f"-w {shlex.quote(str(WORKSPACE))} "
+        f"-v {shlex.quote(str(globalconffile))}:/srv/ksbuilder/ksbuilder.json:ro,z "
+        f"-v {shlex.quote(str(hostconffile))}:/srv/ksbuilder/host.json:ro,z "
+        f"-v {shlex.quote(str(ksfilesdir))}:/srv/ksbuilder/ksfiles:z "
+        f"-v {shlex.quote(str(outputdir))}:/srv/ksbuilder/output:z "
+    )
+
+    if extrafilesdir and extrafilesdir.exists():
+        cmd += f"-v {shlex.quote(str(extrafilesdir))}:/srv/ksbuilder/extrafiles:z "
+
+    cmd += f"{shlex.quote(str(IMAGENAME))} {' '.join(shlex.quote(a) for a in args)}"
+
     subprocess_run_wrapper(
-        cmd=(
-            "podman "
-            "run "
-            "--pids-limit=-1 "
-            f"--name {shlex.quote(str(IMAGENAME))} "
-            "--privileged "
-            f"{ctrargs}"
-            f"-w {shlex.quote(str(WORKSPACE))} "
-            f"-v {shlex.quote(str(globalconffile))}:/srv/ksbuilder/ksbuilder.json:ro,z "
-            f"-v {shlex.quote(str(hostconffile))}:/srv/ksbuilder/host.json:ro,z "
-            f"-v {shlex.quote(str(ksfilesdir))}:/srv/ksbuilder/ksfiles:z "
-            f"-v {shlex.quote(str(outputdir))}:/srv/ksbuilder/output:z "
-            f"{shlex.quote(str(IMAGENAME))} "
-            f"{' '.join(shlex.quote(a) for a in args)}"
-        ),
+        cmd=cmd,
         dryrun=dryrun,
         check=True,
     )
@@ -154,11 +160,15 @@ if __name__ == "__main__":
     logging.info(f"hostconf:\n{json.dumps(hostconf, indent=2)}")
 
     ksfilesdir = get_path(globalconf["ksfilesdir"])
+    extrafilesdir = None
+    if "extrafilesdir" in hostconf and hostconf["extrafilesdir"]:
+        extrafilesdir = get_path(hostconf["extrafilesdir"])
     outputdir = get_path(globalconf["outputdir"])
 
     outfile = Path(hostconf["outfile"])
 
     logging.info(f"ksfilesdir: {shlex.quote(str(ksfilesdir))}")
+    logging.info(f"extrafilesdir: {shlex.quote(str(extrafilesdir))}")
     logging.info(f"outputdir: {shlex.quote(str(outputdir))}")
     logging.info(f"outfile: {shlex.quote(str(outfile))}")
 
@@ -167,6 +177,7 @@ if __name__ == "__main__":
         globalconffile=globalconffile,
         hostconffile=hostconffile,
         ksfilesdir=ksfilesdir,
+        extrafilesdir=extrafilesdir,
         outputdir=outputdir,
         args=passthrough,
         dryrun=dryrun,
