@@ -1,5 +1,15 @@
+# Ksbuilder
 
-# Example running command
+## Quickstart
+
+`sudo /home/holger/Code/public/ksbuilder/cksbuilder --sourcedir /home/holger/Code/public/ksbuilder --build`
+
+`sudo /home/holger/Code/public/ksbuilder/cksbuilder --export-image /srv/work/ksbuilder/ksbuilder.ctr`
+
+`sudo /home/holger/Code/public/ksbuilder/cksbuilder --import-image /srv/work/ksbuilder/ksbuilder.ctr`
+
+## FIXME
+### Example running command
 assuming u have the 
 
 `Fedora-Silverblue-ostree-x86_64-42-1.1.iso`

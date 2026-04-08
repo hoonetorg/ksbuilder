@@ -195,6 +195,54 @@ def build_image(sourcedir: Path, dryrun: bool = False):
     )
 
 
+def export_image(
+    outfile: Path,
+    image: str = IMAGENAME,
+    fmt: str = "oci-archive",
+    dryrun: bool = False,
+):
+    """Export a local Podman image to an archive."""
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    subprocess_run_wrapper(
+        cmd=(
+            "podman save "
+            f"--format {shlex.quote(fmt)} "
+            f"-o {shlex.quote(str(outfile))} "
+            f"{shlex.quote(image)}"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+def import_image(infile: Path, dryrun: bool = False):
+    """Import a Podman image archive produced by `podman save`."""
+    if not is_readable_file(infile):
+        raise FileNotFoundError(f"Image archive not found or not readable: {infile}")
+    subprocess_run_wrapper(
+        cmd=f"podman load -i {shlex.quote(str(infile))}",
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+def release(args: list, dryrun: bool = False):
+    subprocess_run_wrapper(
+        cmd=(
+            "podman run "
+            "--pids-limit=-1 "
+            f"-name {shlex.quote(IMAGENAME)} "
+            "--rm"
+            f"-w {shlex.quote(str(WORKSPACE))} "
+            "--entrypoint release "
+            f"{shlex.quote(IMAGENAME)} "
+            f"{' '.join(shlex.quote(a) for a in args)}"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+
+
 def build(
     interactive: bool,
     globalconffile: Path,
@@ -254,6 +302,26 @@ if __name__ == "__main__":
         help="sourcedir for building container (default '.')",
     )
     parser.add_argument(
+        "--export-image",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Export the local container image to PATH (podman save).",
+    )
+    parser.add_argument(
+        "--import-image",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Import a container image archive from PATH (podman load).",
+    )
+    parser.add_argument(
+        "--image-format",
+        choices=["oci-archive", "docker-archive"],
+        default="oci-archive",
+        help="Image archive format for --export-image (default: oci-archive)",
+    )
+    parser.add_argument(
         "--interactive",
         action="store_true",
         help="Run container in interactive mode with /bin/bash",
@@ -279,6 +347,19 @@ if __name__ == "__main__":
 
     if args.build:
         build_image(sourcedir=sourcedir, dryrun=dryrun)
+        sys.exit(0)
+
+    if args.export_image:
+        export_image(
+            outfile=get_path(args.export_image),
+            image=IMAGENAME,
+            fmt=args.image_format,
+            dryrun=dryrun,
+        )
+        sys.exit(0)
+
+    if args.import_image:
+        import_image(infile=get_path(args.import_image), dryrun=dryrun)
         sys.exit(0)
 
     globalconffile = get_path(args.globalconffile)
