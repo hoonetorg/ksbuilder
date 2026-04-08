@@ -2,11 +2,11 @@
 
 ## Quickstart
 
-`sudo /home/holger/Code/public/ksbuilder/cksbuilder --sourcedir /home/holger/Code/public/ksbuilder --build`
+`sudo <srcdir>/cksbuilder --sourcedir <srcdir> --build`
 
-`sudo /home/holger/Code/public/ksbuilder/cksbuilder --export-image /srv/work/ksbuilder/ksbuilder.ctr`
+`sudo <srcdir>/cksbuilder --export-image <ctrdir>/ksbuilder.ctr`
 
-`sudo /home/holger/Code/public/ksbuilder/cksbuilder --import-image /srv/work/ksbuilder/ksbuilder.ctr`
+`sudo <srcdir>/cksbuilder --import-image <ctrdir>/ksbuilder.ctr`
 
 ## FIXME
 ### Example running command
