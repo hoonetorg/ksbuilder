@@ -128,6 +128,7 @@ def main():
     logging.info(f"hostconf:\n{json.dumps(hostconf, indent=2)}")
 
     ksfile = Path(hostconf["ksfile"])
+    oemfile = Path(hostconf.get("oemfile", "ks.cfg"))
     version = str(hostconf["version"])
     username = str(hostconf["username"])
     userpw = str(hostconf["userpw"])
@@ -298,8 +299,10 @@ def main():
             check=True,
         )
 
-        shutil.copy2(str(ks_to_copy), str(oem_path / "ks.cfg"))
-        logging.info("Copied Kickstart to oem root")
+        logging.info(
+            f"Copying OEM file from {shlex.quote(str(ks_to_copy))} to {shlex.quote(str(oem_path / oemfile))}"
+        )
+        shutil.copy2(str(ks_to_copy), str(oem_path / oemfile))
 
         extra_path.mkdir(parents=True, exist_ok=True)
         subprocess_run_wrapper(
