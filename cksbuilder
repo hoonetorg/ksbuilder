@@ -252,7 +252,7 @@ def build(
     outputdir: Path,
     args: list,
     dryrun: bool = False,
-):
+) -> None:
     ctrargs = "--rm "
     if interactive:
         ctrargs += "-it --entrypoint /bin/bash "
