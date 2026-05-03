@@ -19,4 +19,4 @@ rm -Rf /srv/work/repo/cache
 
 cd /srv/work/repo 
 
-tar -cpzf /srv/work/repo/f43ws.tgz -C f43ws /srv/work/repo/desktop 
+tar -cpzf /srv/work/repo/f43ws.tgz -C /srv/work/repo/desktop f43ws
