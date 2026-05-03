@@ -183,11 +183,11 @@ def ensure_host_loop_devices(
         )
 
 
-def build_image(sourcedir: Path, dryrun: bool = False):
+def build_image(sourcedir: Path, version: str, dryrun: bool = False):
     subprocess_run_wrapper(
         cmd=(
             "podman build "
-            f"-t {shlex.quote(IMAGENAME)} "
+            f"-t {shlex.quote(IMAGENAME)}:{version} "
             f"-f {shlex.quote(str(sourcedir / Path(CONTAINERFILE)))}"
         ),
         dryrun=dryrun,
@@ -197,9 +197,10 @@ def build_image(sourcedir: Path, dryrun: bool = False):
 
 def export_image(
     outfile: Path,
-    image: str = IMAGENAME,
-    fmt: str = "oci-archive",
-    dryrun: bool = False,
+    image: str,
+    version: str,
+    fmt: str,
+    dryrun: bool,
 ) -> None:
     """Export a local Podman image to an archive."""
     outfile.parent.mkdir(parents=True, exist_ok=True)
@@ -208,7 +209,7 @@ def export_image(
             "podman save "
             f"--format {shlex.quote(fmt)} "
             f"-o {shlex.quote(str(outfile))} "
-            f"{shlex.quote(image)}"
+            f"{shlex.quote(image)}:{version}"
         ),
         dryrun=dryrun,
         check=True,
@@ -346,13 +347,14 @@ if __name__ == "__main__":
     logging.info(f"sourcedir: {shlex.quote(str(sourcedir))}")
 
     if args.build:
-        build_image(sourcedir=sourcedir, dryrun=dryrun)
+        build_image(sourcedir=sourcedir, version="latest", dryrun=dryrun)
         sys.exit(0)
 
     if args.export_image:
         export_image(
             outfile=get_path(args.export_image),
             image=IMAGENAME,
+            version="latest",
             fmt=args.image_format,
             dryrun=dryrun,
         )
