@@ -82,7 +82,7 @@ def replace_token(text: str, token: str, value) -> None:
     return text.replace(f"{{{{{token}}}}}", str(value))
 
 
-def main():
+def main() -> None:
     dryrun = False
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
