@@ -200,7 +200,7 @@ def export_image(
     image: str = IMAGENAME,
     fmt: str = "oci-archive",
     dryrun: bool = False,
-):
+) -> None:
     """Export a local Podman image to an archive."""
     outfile.parent.mkdir(parents=True, exist_ok=True)
     subprocess_run_wrapper(
@@ -215,8 +215,8 @@ def export_image(
     )
 
 
-def import_image(infile: Path, dryrun: bool = False):
-    """Import a Podman image archive produced by `podman save`."""
+def import_image(infile: Path, dryrun: bool = False) -> None:
+    """Import a Podman image archive produced by export-image."""
     if not is_readable_file(infile):
         raise FileNotFoundError(f"Image archive not found or not readable: {infile}")
     subprocess_run_wrapper(
@@ -306,7 +306,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         metavar="PATH",
-        help="Export the local container image to PATH (podman save).",
+        help="Export the local container image to PATH (podman save, oci-archive).",
     )
     parser.add_argument(
         "--import-image",
