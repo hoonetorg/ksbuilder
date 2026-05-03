@@ -1,0 +1,23 @@
+FROM fedora:{{version}}
+
+LABEL org.opencontainers.image.description="repo builder"
+
+RUN dnf install -y \
+        python3 \
+        dnf5 \
+        createrepo_c \
+        zstd \
+        fedora-repos \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# Enable the Cisco OpenH264 repo (disabled by default, needs explicit opt-in)
+RUN dnf config-manager setopt fedora-cisco-openh264.enabled=1 2>/dev/null || true
+
+RUN mkdir -p /repobldr
+WORKDIR /repobldr
+
+COPY src/repobldr /usr/local/bin/repobldr
+RUN chmod +x /usr/local/bin/repobldr
+
+ENTRYPOINT ["/usr/local/bin/repobldr"]

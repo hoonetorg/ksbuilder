@@ -1,0 +1,327 @@
+#!/usr/bin/env -S python3 -u
+import logging
+
+import os
+import sys
+import subprocess
+import shlex
+import shutil
+
+from pathlib import Path
+
+
+APPNAME = "repobldr"
+WORKSPACE = Path(f"/{APPNAME}")
+
+BASE_PACKAGES: list[str] = [
+    # Environments / groups
+    "@workstation-product-environment",
+    "@core",
+    # Kernel
+    "kernel",
+    "kernel-modules",
+    "kernel-modules-extra",
+    # Boot / EFI (x86-64)
+    "grub2-efi-x64",
+    "grub2-tools",
+    "grub2-tools-extra",
+    "grubby",
+    "shim-x64",
+    "efibootmgr",
+    # Filesystem / storage
+    "dosfstools",
+    "btrfs-progs",
+    "ntfsprogs",
+    "cryptsetup",
+    # Storage device management
+    # nvme-cli is added by anaconda when an NVMe drive is detected;
+    # include it unconditionally so the repo is usable on NVMe machines.
+    "nvme-cli",
+    "hdparm",
+    "smartmontools",
+    "lvm2",
+    "mdadm",
+    # Hardware / firmware
+    "pciutils",
+    "usbutils",
+    "dmidecode",
+    "lshw",
+    "fwupd",
+    # Network / time
+    "chrony",
+    "NetworkManager",
+    "NetworkManager-wifi",
+    # Locale
+    "langpacks-en",
+    # Auth / PAM
+    "authselect",
+    # Misc tooling useful during & after install
+    "rsync",
+    "tar",
+    "gzip",
+]
+
+# NOTE on "anaconda magic" package discovery
+#
+# Anaconda adds packages beyond the comps group definition in several ways:
+#
+#  1. Hardware probing  – pyanaconda/modules/payloads/dnf/requirements.py
+#     detects storage controllers, GPUs, network cards and maps them to
+#     package names (e.g. NVMe → nvme-cli, NVIDIA → akmod-nvidia, …).
+#
+#  2. Kickstart %packages stanza – packages listed there are merged.
+#
+#  3. DNF weak deps  – --setopt=install_weak_deps=True pulls Recommends:.
+#
+#  4. Comps environments – @workstation-product-environment pulls mandatory
+#     AND optional members of every component group.
+#
+# Best practical strategies to discover what anaconda would install:
+#
+#  a) Read the anaconda log from an interactive install:
+#       journalctl -b | grep 'anaconda'
+#       /tmp/anaconda.log  (or /var/log/anaconda/dnf.librepo.log)
+#
+#  b) Inspect requirements.py in the anaconda source for your target version:
+#       https://github.com/rhinstaller/anaconda/blob/main/pyanaconda/
+#               modules/payloads/dnf/requirements.py
+#
+#  c) Use dnf5 on an installed system to simulate the full solve:
+#       dnf5 install --assumeno --setopt=install_weak_deps=True \
+#           --releasever=44 @workstation-product-environment @core …
+#     and compare the transaction output with the packages actually present.
+#
+#  d) Use dnf5 repoquery --requires / --whatprovides to trace deps.
+#
+#  e) Add suspected hardware packages here (or via --packages on the runner)
+#     and they will be silently skipped if already present in the group.
+
+
+def subprocess_run_wrapper(
+    cmd: str, dryrun: bool = False, **kwargs
+) -> subprocess.CompletedProcess | None:
+    if kwargs.get("shell"):
+        wcmd = cmd
+    else:
+        wcmd = shlex.split(cmd)
+
+    if dryrun:
+        logging.info(f"[DRYRUN] {cmd}")
+        return None
+
+    logging.info(f"[EXECUTING] {cmd}")
+    return subprocess.run(wcmd, **kwargs)
+
+
+def get_path(path):
+    return Path(path).expanduser().absolute()
+
+
+def is_readable_file(file: Path) -> bool:
+    return file.exists() and file.is_file() and os.access(file, os.R_OK)
+
+
+def get_size_mib(folder):
+    total = 0
+    for dirpath, _, files in os.walk(folder):
+        for f in files:
+            total += os.path.getsize(os.path.join(dirpath, f))
+    return max(64, int(total // (1024**2) * 1.2))
+
+
+def patch_inst_stage2(file_path, old_label, new_label):
+    with open(file_path, "r", encoding="utf-8") as f:
+        data = f.read()
+    patched = data.replace(
+        f"inst.stage2=hd:LABEL={old_label}",
+        f"inst.stage2=hd:LABEL={new_label} inst.ks=hd:LABEL={new_label}:/ks.cfg",
+    )
+    # Optionally, handle cases where spaces or quotes are around the label
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(patched)
+
+
+def ensure_clean_dir(p: Path) -> None:
+    if p.exists():
+        logging.info(f"Cleaning dir {shlex.quote(str(p))}")
+        shutil.rmtree(p)
+    logging.info(f"Creating dir {shlex.quote(str(p))}")
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def replace_token(text: str, token: str, value) -> None:
+    if value is None:
+        return
+    return text.replace(f"{{{{{token}}}}}", str(value))
+
+
+def find_files(root: Path, pattern: str) -> list[Path]:
+    return list(root.rglob(pattern))
+
+
+def banner(msg: str) -> None:
+    logging.info("=" * 50)
+    logging.info(msg)
+    logging.info("=" * 50)
+
+
+def clean_and_prepare(
+    cache_dir: Path, repo_dir: Path, output_dir: Path, dryrun: bool = False
+) -> None:
+    logging.info("Preparing directories…")
+    for d in (cache_dir, repo_dir):
+        if d.exists():
+            import shutil
+
+            shutil.rmtree(d)
+    (repo_dir / "packages").mkdir(parents=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+
+def download_packages(
+    version: int,
+    cache_dir: Path,
+    packages: list[str],
+    dryrun: bool = False,
+) -> None:
+    logging.info(f"Downloading packages (releasever={version})")
+    subprocess_run_wrapper(
+        cmd=(
+            "dnf5 install "
+            f"--releasever={version} "
+            "--disable-repo=* "
+            "--enable-repo=fedora "
+            "--enable-repo=updates "
+            "--enable-repo=fedora-cisco-openh264 "
+            "--downloadonly "
+            "--refresh "
+            "--setopt=install_weak_deps=True "
+            f"--installroot={cache_dir} "
+            "--use-host-config "
+            "--assumeyes "
+            f"{' '.join(shlex.quote(p) for p in packages)} "
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+def collect_rpms(cache_dir: Path, packages_dir: Path, dryrun: bool = False) -> int:
+    logging.info("Collecting RPMs…")
+    rpms = find_files(cache_dir, "*.rpm")
+    for rpm in rpms:
+        dest = packages_dir / rpm.name
+        dest.write_bytes(rpm.read_bytes())
+    logging.info(f"RPMs collected: {len(rpms)}")
+    return len(rpms)
+
+
+def extract_comps(
+    cache_dir: Path, desktop_dir: Path, dryrun: bool = False
+) -> Path | None:
+    """
+    Find the comps XML compressed with zstd inside the libdnf5 cache and
+    decompress it.  Returns the path to comps.xml, or None if not found.
+    """
+    logging.info("Locating comps.xml…")
+    candidates = find_files(cache_dir / "var" / "cache" / "libdnf5", "*comps*.xml.zst")
+    if not candidates:
+        logging.warning("comps.xml.zst not found – repo will be created without comps.")
+        return None
+
+    zst_path = candidates[0]
+    comps_path = desktop_dir / "comps.xml"
+    logging.info(f"Extracting comps from: {zst_path}")
+    subprocess_run_wrapper(
+        cmd=f"zstd -d {str(zst_path)} -o {str(comps_path)} --force",
+        dryrun=dryrun,
+        check=True,
+    )
+    return comps_path
+
+
+def create_repo(repo_dir: Path, comps_path: Path | None, dryrun: bool = False) -> None:
+    logging.info("Running createrepo_c")
+    cmd = "createrepo_c "
+    if comps_path is not None:
+        cmd += f"-g {str(comps_path)} "
+    cmd += f"{str(repo_dir)} "
+    subprocess_run_wrapper(
+        cmd=cmd,
+        dryrun=dryrun,
+        check=True,
+    )
+
+    if comps_path is not None:
+        comps_path.unlink(missing_ok=True)
+
+
+def cleanup_cache(cache_dir: Path, dryrun: bool = False) -> None:
+    import shutil
+
+    logging.info("Cleaning up download cache…")
+    shutil.rmtree(cache_dir, ignore_errors=True)
+
+
+def create_tarball(
+    output_tgz: Path, desktop_dir: Path, repo_dirname: str, dryrun: bool = False
+) -> None:
+    logging.info(f"Creating tarball: {output_tgz}")
+    subprocess_run_wrapper(
+        cmd=(
+            f"tar -cpzf {str(output_tgz)} " f"-C {str(desktop_dir)} " f"{repo_dirname}"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+    size = output_tgz.stat().st_size / (1024**2)
+    logging.info(f"Done: {output_tgz}  ({size:.1f} MiB)")
+
+
+def main() -> None:
+    dryrun = False
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
+    if len(sys.argv) < 2:
+        print(
+            f"Usage: {sys.argv[0]} <fedora-version> [extra-package ...]",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    try:
+        version = int(sys.argv[1])
+    except ValueError:
+        print(
+            f"ERROR: Fedora version must be an integer, got: {sys.argv[1]}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    extra_packages: list[str] = sys.argv[2:]
+    all_packages = BASE_PACKAGES + extra_packages
+
+    cache_dir = WORKSPACE / "cache"
+    desktop_dir = WORKSPACE / "desktop"
+    repo_dirname = f"f{version}ws"
+    repo_dir = desktop_dir / repo_dirname
+    output_dir = WORKSPACE / "output"
+    output_tgz = output_dir / f"{repo_dirname}.tgz"
+
+    banner(
+        f"Fedora version : {version}\n"
+        f"[repobldr] Output         : {output_tgz}\n"
+        f"[repobldr] Extra packages : {extra_packages or '<none>'}"
+    )
+
+    clean_and_prepare(cache_dir, repo_dir, output_dir, dryrun=dryrun)
+    download_packages(version, cache_dir, all_packages, dryrun=dryrun)
+    collect_rpms(cache_dir, repo_dir / "packages", dryrun=dryrun)
+    comps_path = extract_comps(cache_dir, desktop_dir, dryrun=dryrun)
+    create_repo(repo_dir, comps_path, dryrun=dryrun)
+    cleanup_cache(cache_dir, dryrun=dryrun)
+    create_tarball(output_tgz, desktop_dir, repo_dirname, dryrun=dryrun)
+
+
+if __name__ == "__main__":
+    main()

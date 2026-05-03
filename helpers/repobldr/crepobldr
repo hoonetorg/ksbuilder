@@ -1,0 +1,411 @@
+#!/usr/bin/env -S python3 -u
+
+import argparse
+
+import logging
+
+from pathlib import Path
+import os
+import sys
+import subprocess
+import shlex
+
+import re
+import time
+
+
+APPNAME = "repobldr"
+IMAGENAME = APPNAME
+CONTAINERFILE = "Containerfile"
+WORKSPACE = Path(f"/{APPNAME}")
+DEFAULT_EXTRA_PACKAGES: list[str] = []
+
+
+def subprocess_run_wrapper(
+    cmd: str, dryrun: bool = False, **kwargs
+) -> subprocess.CompletedProcess | None:
+    if kwargs.get("shell"):
+        wcmd = cmd
+    else:
+        wcmd = shlex.split(cmd)
+
+    if dryrun:
+        logging.info(f"[DRYRUN] {cmd}")
+        return None
+
+    logging.info(f"[EXECUTING] {cmd}")
+    return subprocess.run(wcmd, **kwargs)
+
+
+def get_path(path: str) -> Path:
+    return Path(path).expanduser().absolute()
+
+
+def is_readable_file(file: Path) -> bool:
+    return file.exists() and file.is_file() and os.access(file, os.R_OK)
+
+
+def get_existing_loopdevs() -> list[str]:
+    result = []
+    for p in sorted(Path("/dev").glob("loop[0-9]*")):
+        if p.name[4:].isdigit():
+            result.append(str(p))
+    return result
+
+
+def get_attached_loopdevs(dryrun: bool = False) -> set[str]:
+    result = subprocess_run_wrapper(
+        cmd="losetup -a",
+        dryrun=dryrun,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    if result is None:
+        return set()
+
+    attached = set()
+    for line in result.stdout.splitlines():
+        m = re.match(r"^(/dev/loop[0-9]+):", line)
+        if m:
+            attached.add(m.group(1))
+    return attached
+
+
+def get_free_loopdev_count(dryrun: bool = False) -> tuple[int, list[str], set[str]]:
+    existing = get_existing_loopdevs()
+    attached = get_attached_loopdevs(dryrun=dryrun)
+    free_count = len([dev for dev in existing if dev not in attached])
+    return free_count, existing, attached
+
+
+def ensure_host_loop_devices(
+    desired_count: int = 64,
+    tmpdir: Path = Path("/tmp/faibuilder-loopdev-init"),
+    dryrun: bool = False,
+) -> None:
+    if desired_count < 1:
+        raise ValueError("desired_count must be >= 1")
+
+    attached_temp_loopdevs: list[str] = []
+    created_files: list[Path] = []
+
+    free_count, existing_before, attached_before = get_free_loopdev_count(dryrun=dryrun)
+
+    logging.info(f"existing loopdevs: {len(existing_before)}")
+    logging.info(f"attached loopdevs: {len(attached_before)}")
+    logging.info(f"free loopdevs: {free_count}")
+    logging.info(f"desired free loopdevs: {desired_count}")
+
+    if free_count >= desired_count:
+        logging.info(
+            f"Already enough free loop devices exist ({free_count} >= {desired_count}), nothing to do"
+        )
+        return
+
+    additional_needed = desired_count - free_count
+    logging.info(
+        f"Need to prepare {desired_count} loop device(s)\n  (1st fill up free and then create additional {additional_needed} loop device(s))"
+    )
+
+    try:
+        tmpdir.mkdir(parents=True, exist_ok=True)
+
+        for i in range(desired_count):
+            backing_file = tmpdir / f"loop-prep-{i}.img"
+            created_files.append(backing_file)
+
+            logging.info(f"Creating temporary backing file {backing_file}")
+            if not dryrun:
+                with backing_file.open("wb") as f:
+                    f.truncate(4096)
+
+            result = subprocess_run_wrapper(
+                cmd=f"losetup --show -f {shlex.quote(str(backing_file))}",
+                dryrun=dryrun,
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+
+            if result is not None:
+                loopdev = result.stdout.strip()
+                attached_temp_loopdevs.append(loopdev)
+                logging.info(f"Attached {backing_file} to {loopdev}")
+
+    finally:
+        for loopdev in reversed(attached_temp_loopdevs):
+            try:
+                subprocess_run_wrapper(
+                    cmd=f"losetup -d {shlex.quote(loopdev)}",
+                    dryrun=dryrun,
+                    check=True,
+                )
+                logging.info(f"Detached temporary loop device {loopdev}")
+            except Exception as e:
+                logging.warning(f"Failed to detach {loopdev}: {e}")
+
+        for backing_file in created_files:
+            try:
+                if dryrun:
+                    logging.info(f"[DRYRUN] unlink {backing_file}")
+                elif backing_file.exists():
+                    backing_file.unlink()
+                    logging.info(f"Deleted temporary file {backing_file}")
+            except Exception as e:
+                logging.warning(f"Failed to delete {backing_file}: {e}")
+
+        try:
+            if dryrun:
+                logging.info(f"[DRYRUN] rmdir {tmpdir}")
+            elif tmpdir.exists() and not any(tmpdir.iterdir()):
+                tmpdir.rmdir()
+                logging.info(f"Deleted temporary directory {tmpdir}")
+        except Exception as e:
+            logging.warning(f"Failed to remove temp directory {tmpdir}: {e}")
+
+    for ucmd in ["trigger", "settle"]:
+        subprocess_run_wrapper(cmd=f"udevadm {shlex.quote(ucmd)}", dryrun=dryrun)
+        time.sleep(5)
+
+    free_count_after, existing_after, attached_after = get_free_loopdev_count(
+        dryrun=dryrun
+    )
+    logging.info(f"existing loopdevs after preparation: {len(existing_after)}")
+    logging.info(f"attached loopdevs after preparation: {len(attached_after)}")
+    logging.info(f"free loopdevs after preparation: {free_count_after}")
+
+    if free_count_after < desired_count:
+        raise RuntimeError(
+            f"Loop device preparation did not reach desired free count: "
+            f"{free_count_after} < {desired_count}"
+        )
+
+
+def build_image(sourcedir: Path, version: str, dryrun: bool = False):
+    template = sourcedir / "Containerfile.in"
+    containerfile = sourcedir / "Containerfile"
+
+    if not template.exists():
+        logging.error(f"Containerfile.in not found: {template}")
+        sys.exit(1)
+
+    content = template.read_text()
+    content = re.sub(r"\{\{version\}\}", str(version), content)
+    containerfile.write_text(content)
+    logging.info(f"Generated {containerfile} from template (version={version})")
+
+    try:
+        subprocess_run_wrapper(
+            cmd=(
+                "podman build "
+                f"-t {shlex.quote(IMAGENAME)}:{version} "
+                f"-f {shlex.quote(str(sourcedir / Path(CONTAINERFILE)))}"
+            ),
+            dryrun=dryrun,
+            check=True,
+        )
+    finally:
+        containerfile.unlink(missing_ok=True)
+        logging.info(f"Removed generated {containerfile}")
+
+
+def export_image(
+    outfile: Path,
+    image: str,
+    version: str,
+    fmt: str,
+    dryrun: bool,
+) -> None:
+    """Export a local Podman image to an archive."""
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    subprocess_run_wrapper(
+        cmd=(
+            "podman save "
+            f"--format {shlex.quote(fmt)} "
+            f"-o {shlex.quote(str(outfile))} "
+            f"{shlex.quote(image)}:{version}"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+def import_image(infile: Path, dryrun: bool = False) -> None:
+    """Import a Podman image archive produced by export-image."""
+    if not is_readable_file(infile):
+        raise FileNotFoundError(f"Image archive not found or not readable: {infile}")
+    subprocess_run_wrapper(
+        cmd=f"podman load -i {shlex.quote(str(infile))}",
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+def release(args: list, dryrun: bool = False):
+    subprocess_run_wrapper(
+        cmd=(
+            "podman run "
+            "--pids-limit=-1 "
+            f"-name {shlex.quote(IMAGENAME)} "
+            "--rm"
+            f"-w {shlex.quote(str(WORKSPACE))} "
+            "--entrypoint release "
+            f"{shlex.quote(IMAGENAME)} "
+            f"{' '.join(shlex.quote(a) for a in args)}"
+        ),
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+def build(
+    interactive: bool,
+    version: int,
+    extra_packages: list[str],
+    outputdir: Path,
+    dryrun: bool = False,
+) -> None:
+    ctrargs = "--rm "
+    if interactive:
+        ctrargs += "-it --entrypoint /bin/bash "
+
+    # The container calls dnf5 --installroot which needs a writable /proc
+    # bind-mount inside the installroot; --privileged is the simplest way
+    # to allow that (same requirement as ksbuilder).
+
+    # Pass version as first positional arg, then any extra packages.
+
+    cmd = (
+        "podman "
+        "run "
+        "--pids-limit=-1 "
+        f"--name {shlex.quote(str(IMAGENAME))} "
+        "--privileged "
+        f"{ctrargs}"
+        f"-w {shlex.quote(str(WORKSPACE))} "
+        f"-v {shlex.quote(str(outputdir))}:{shlex.quote(str(WORKSPACE))}/output:z "
+    )
+
+    cmd += f"{shlex.quote(str(IMAGENAME))}:{str(version)} {shlex.quote(str(version))}  {' '.join(shlex.quote(p) for p in extra_packages)}"
+
+    subprocess_run_wrapper(
+        cmd=cmd,
+        dryrun=dryrun,
+        check=True,
+    )
+
+
+if __name__ == "__main__":
+    dryrun = False
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
+    parser = argparse.ArgumentParser(description="Build and run the repobldr container")
+    parser.add_argument(
+        "--build", action="store_true", help=f"Build {IMAGENAME} container"
+    )
+    parser.add_argument(
+        "--sourcedir",
+        type=str,
+        default=".",
+        help="sourcedir for building container (default '.')",
+    )
+    parser.add_argument(
+        "--export-image",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Export the local container image to PATH (podman save, oci-archive).",
+    )
+    parser.add_argument(
+        "--import-image",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Import a container image archive from PATH (podman load).",
+    )
+    parser.add_argument(
+        "--image-format",
+        choices=["oci-archive", "docker-archive"],
+        default="oci-archive",
+        help="Image archive format for --export-image (default: oci-archive)",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Run container in interactive mode with /bin/bash",
+    )
+    parser.add_argument(
+        "--version",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Fedora release version to build the repo for (e.g. 44).",
+    )
+    parser.add_argument(
+        "--outputdir",
+        type=str,
+        default=".",
+        metavar="PATH",
+        help="Host directory to write f<VERSION>ws.tgz into (default: '.').",
+    )
+    parser.add_argument(
+        "--packages",
+        type=str,
+        default="",
+        metavar="'pkg1 pkg2 …'",
+        help=(
+            "Space-separated list of additional packages to include in the repo "
+            "(e.g. hardware-specific packages anaconda would add automatically). "
+            "These are merged with the base package set inside the container."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    sourcedir = get_path(args.sourcedir)
+
+    logging.info(f"sourcedir: {shlex.quote(str(sourcedir))}")
+
+    if args.version is None:
+        parser.error("--version is required when running the container.")
+
+    logging.info(f"version    : {args.version}")
+
+    if args.build:
+        build_image(sourcedir=sourcedir, version=str(args.version), dryrun=dryrun)
+        sys.exit(0)
+
+    if args.export_image:
+        export_image(
+            outfile=get_path(args.export_image),
+            image=IMAGENAME,
+            version=str(args.version),
+            fmt=args.image_format,
+            dryrun=dryrun,
+        )
+        sys.exit(0)
+
+    if args.import_image:
+        import_image(infile=get_path(args.import_image), dryrun=dryrun)
+        sys.exit(0)
+
+    extra_packages: list[str] = DEFAULT_EXTRA_PACKAGES + [
+        p for p in args.packages.split() if p
+    ]
+
+    outputdir = get_path(args.outputdir)
+    logging.info(f"outputdir  : {shlex.quote(str(outputdir))}")
+    logging.info(f"extra pkgs : {extra_packages}")
+
+    build(
+        interactive=args.interactive,
+        version=args.version,
+        extra_packages=extra_packages,
+        outputdir=outputdir,
+        dryrun=dryrun,
+    )
+
+    tgz = outputdir / f"f{args.version}ws.tgz"
+    logging.info(f"Repo tarball (if successful): {shlex.quote(str(tgz))}")
