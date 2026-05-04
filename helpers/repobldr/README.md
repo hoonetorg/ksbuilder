@@ -1,4 +1,6 @@
  repobldr - Build and run the repobldr container
+
+```
 #
 # Creates a Fedora Workstation offline-install repo tarball (f<VERSION>ws.tgz)
 # suitable for use with a kickstart %repo line pointing at a local partition.
@@ -24,3 +26,12 @@
 # Passed as positional arguments to the container entrypoint after the version.
 # Use --packages on the command line to extend this list.
 
+# NOTE on "anaconda magic" package discovery
+#
+# Anaconda adds packages beyond the comps group definition in several ways:
+#
+#  1. Hardware probing  – pyanaconda/modules/payloads/dnf/requirements.py
+#     (https://github.com/rhinstaller/anaconda/blob/main/pyanaconda/modules/payloads/dnf/requirements.py)
+#
+#  2. DNF weak deps  – --setopt=install_weak_deps=True pulls Recommends
+```

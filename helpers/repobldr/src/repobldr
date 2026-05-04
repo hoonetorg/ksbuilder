@@ -13,14 +13,13 @@ from pathlib import Path
 APPNAME = "repobldr"
 WORKSPACE = Path(f"/{APPNAME}")
 
+# from /var/log/anaconda/packaging.log: search for @workstation
 BASE_PACKAGES: list[str] = [
     # Environments / groups
     "@workstation-product-environment",
     "@core",
     # Kernel
     "kernel",
-    "kernel-modules",
-    "kernel-modules-extra",
     # Boot / EFI (x86-64)
     "grub2-efi-x64",
     "grub2-tools",
@@ -34,67 +33,14 @@ BASE_PACKAGES: list[str] = [
     "ntfsprogs",
     "cryptsetup",
     # Storage device management
-    # nvme-cli is added by anaconda when an NVMe drive is detected;
-    # include it unconditionally so the repo is usable on NVMe machines.
     "nvme-cli",
-    "hdparm",
-    "smartmontools",
-    "lvm2",
-    "mdadm",
-    # Hardware / firmware
-    "pciutils",
-    "usbutils",
-    "dmidecode",
-    "lshw",
-    "fwupd",
     # Network / time
     "chrony",
-    "NetworkManager",
-    "NetworkManager-wifi",
     # Locale
     "langpacks-en",
     # Auth / PAM
     "authselect",
-    # Misc tooling useful during & after install
-    "rsync",
-    "tar",
-    "gzip",
 ]
-
-# NOTE on "anaconda magic" package discovery
-#
-# Anaconda adds packages beyond the comps group definition in several ways:
-#
-#  1. Hardware probing  – pyanaconda/modules/payloads/dnf/requirements.py
-#     detects storage controllers, GPUs, network cards and maps them to
-#     package names (e.g. NVMe → nvme-cli, NVIDIA → akmod-nvidia, …).
-#
-#  2. Kickstart %packages stanza – packages listed there are merged.
-#
-#  3. DNF weak deps  – --setopt=install_weak_deps=True pulls Recommends:.
-#
-#  4. Comps environments – @workstation-product-environment pulls mandatory
-#     AND optional members of every component group.
-#
-# Best practical strategies to discover what anaconda would install:
-#
-#  a) Read the anaconda log from an interactive install:
-#       journalctl -b | grep 'anaconda'
-#       /tmp/anaconda.log  (or /var/log/anaconda/dnf.librepo.log)
-#
-#  b) Inspect requirements.py in the anaconda source for your target version:
-#       https://github.com/rhinstaller/anaconda/blob/main/pyanaconda/
-#               modules/payloads/dnf/requirements.py
-#
-#  c) Use dnf5 on an installed system to simulate the full solve:
-#       dnf5 install --assumeno --setopt=install_weak_deps=True \
-#           --releasever=44 @workstation-product-environment @core …
-#     and compare the transaction output with the packages actually present.
-#
-#  d) Use dnf5 repoquery --requires / --whatprovides to trace deps.
-#
-#  e) Add suspected hardware packages here (or via --packages on the runner)
-#     and they will be silently skipped if already present in the group.
 
 
 def subprocess_run_wrapper(
