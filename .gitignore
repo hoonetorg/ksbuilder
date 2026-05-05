@@ -1,2 +1,3 @@
 ksfiles/*
 !ksfiles/ks*.cfg
+helpers/repobldr/Containerfile
