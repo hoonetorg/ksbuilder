@@ -68,11 +68,11 @@
           
           
           def write_ks_snippets(
-              diskpath: str, disklayout: dict, btrfsbootlabel: str, btrfsrootlabel: str
+              diskpath: str, disklayout: dict, btrfsrootlabel: str 
           ):
               esp_number = disklayout["esp"]["number"]
-              boot_number = disklayout["boot"]["number"]
               root_number = disklayout["root"]["number"]
+              swap_number = disklayout["swap"]["number"]
           
               efi_fstype_opt = '--fstype="efi"' if disklayout["esp"]["wipe"] else "              "
               efi_noformat_opt = "--noformat" if not disklayout["esp"]["wipe"] else ""
@@ -81,21 +81,20 @@
               with open("/tmp/disk-id", "w") as f:
                   f.write(str(diskpath))
           
-              with open("/tmp/boot-number", "w") as f:
-                  f.write(str(boot_number))
+              with open("/tmp/root-number", "w") as f:
+                  f.write(str(root_number))
           
               # Generate partitions.ks Kickstart fragment
               partitions_ks = f"""
               ignoredisk --only-use={diskpath}
               part /boot/efi {efi_fstype_opt} --onpart={diskpath}-part{esp_number} {efi_noformat_opt} --fsoptions="umask=0077,shortname=winnt"
-              part btrfs.{boot_number} --fstype="btrfs" --onpart={diskpath}-part{boot_number}
               part btrfs.{root_number} --fstype="btrfs" --onpart={diskpath}-part{root_number} --encrypted --luks-version=luks2
+              part swap                --fstype="swap"  --onpart={diskpath}-part{swap_number} --encrypted --luks-version=luks2
               
-              btrfs none --label={btrfsbootlabel} --data=single btrfs.{boot_number}
-              btrfs none --label={btrfsrootlabel} --data=single btrfs.{root_number} 
+              btrfs none --label={btrfsrootlabel} --data=single btrfs.{root_number}
               
               btrfs / --subvol --name=root {btrfsrootlabel}
-              btrfs /boot --subvol --name=boot {btrfsbootlabel}
+              btrfs /boot --subvol --name=boot {btrfsrootlabel}
               btrfs /home --subvol --name=home {btrfsrootlabel}
               """
               with open("/tmp/partitions.ks", "w") as f:
@@ -246,25 +245,25 @@
           def do_partition(diskpath: str, disklayout: dict, dryrun: bool = False):
               # Disk is valid and empty – now partition it
               esp_number = disklayout["esp"]["number"]
-              boot_number = disklayout["boot"]["number"]
               root_number = disklayout["root"]["number"]
+              swap_number = disklayout["swap"]["number"]
           
               start_mib = 1
               esp_mib = disklayout["esp"]["sizemib"]
-              boot_mib = disklayout["boot"]["sizemib"]
               root_mib = disklayout["root"]["sizemib"]
+              swap_mib = disklayout["swap"]["sizemib"]
               esp_end_mib = start_mib + esp_mib
-              boot_end_mib = esp_end_mib + boot_mib
-              root_end_mib = boot_end_mib + root_mib
+              root_end_mib = esp_end_mib + root_mib
+              swap_end_mib = root_end_mib + swap_mib
           
               logging.info(
                   f"ESP: number: {esp_number}, size(MiB): {esp_mib}, start(MiB): {start_mib}, end(MiB): {esp_end_mib}"
               )
               logging.info(
-                  f"boot: number: {boot_number}, size(MiB): {boot_mib}, start(MiB): {esp_end_mib}, end(MiB): {boot_end_mib}"
+                  f"root: number: {root_number}, size(MiB): {root_mib}, start(MiB): {esp_end_mib}, end(MiB): {root_end_mib}"
               )
               logging.info(
-                  f"root: number: {root_number}, size(MiB): {root_mib}, start(MiB): {boot_end_mib}, end(MiB): {root_end_mib}"
+                  f"swap: number: {swap_number}, size(MiB): {swap_mib}, start(MiB): {root_end_mib}, end(MiB): {swap_end_mib}"
               )
           
               logging.info(f"Partitioning {diskpath}")
@@ -275,14 +274,14 @@
                       "unit MiB "
                       "mklabel gpt "
                       f"mkpart primary {shlex.quote(str(start_mib))} {shlex.quote(str(esp_end_mib))} "
-                      f"mkpart primary {shlex.quote(str(esp_end_mib))} {shlex.quote(str(boot_end_mib))} "
-                      f"mkpart primary {shlex.quote(str(boot_end_mib))} {shlex.quote(str(root_end_mib))} "
+                      f"mkpart primary {shlex.quote(str(esp_end_mib))} {shlex.quote(str(root_end_mib))} "
+                      f"mkpart primary {shlex.quote(str(root_end_mib))} {shlex.quote(str(swap_end_mib))} "
                       f"set {shlex.quote(str(esp_number))} boot on "
                       f"set {shlex.quote(str(esp_number))} esp on "
-                      f"set {shlex.quote(str(boot_number))} bls_boot on "
+                      f"set {shlex.quote(str(root_number))} bls_boot on "
                       f"name {shlex.quote(str(esp_number))} {shlex.quote("'EFI System Partition'")} "
-                      f"name {shlex.quote(str(boot_number))} {shlex.quote("''")} "
-                      f"name {shlex.quote(str(root_number))} {shlex.quote("''")}"
+                      f"name {shlex.quote(str(root_number))} {shlex.quote("''")} "
+                      f"name {shlex.quote(str(swap_number))} {shlex.quote("''")}"
                   ),
                   dryrun=dryrun,
               )
@@ -301,19 +300,19 @@
           def do_add_partitions(
               diskpath: str, disklayout: dict, start_mib: int, dryrun: bool = False
           ):
-              boot_number = disklayout["boot"]["number"]
               root_number = disklayout["root"]["number"]
+              swap_number = disklayout["swap"]["number"]
           
-              boot_mib = disklayout["boot"]["sizemib"]
               root_mib = disklayout["root"]["sizemib"]
-              boot_end_mib = start_mib + boot_mib
-              root_end_mib = boot_end_mib + root_mib
+              swap_mib = disklayout["swap"]["sizemib"]
+              root_end_mib = start_mib + root_mib
+              swap_end_mib = root_end_mib + swap_mib
           
               logging.info(
-                  f"boot: number: {boot_number}, size(MiB): {boot_mib}, start(MiB): {start_mib}, end(MiB): {boot_end_mib}"
+                  f"root: number: {root_number}, size(MiB): {root_mib}, start(MiB): {start_mib}, end(MiB): {root_end_mib}"
               )
               logging.info(
-                  f"root: number: {root_number}, size(MiB): {root_mib}, start(MiB): {boot_end_mib}, end(MiB): {root_end_mib}"
+                  f"swap: number: {swap_number}, size(MiB): {swap_mib}, start(MiB): {root_end_mib}, end(MiB): {swap_end_mib}"
               )
           
               logging.info(f"Partitioning {diskpath}")
@@ -322,11 +321,11 @@
                       "parted --script "
                       f"{shlex.quote(diskpath)} "
                       "unit MiB "
-                      f"mkpart primary {shlex.quote(str(start_mib))} {shlex.quote(str(boot_end_mib))} "
-                      f"mkpart primary {shlex.quote(str(boot_end_mib))} {shlex.quote(str(root_end_mib))} "
-                      f"set {shlex.quote(str(boot_number))} bls_boot on "
-                      f"name {shlex.quote(str(boot_number))} {shlex.quote("''")} "
-                      f"name {shlex.quote(str(root_number))} {shlex.quote("''")}"
+                      f"mkpart primary {shlex.quote(str(start_mib))} {shlex.quote(str(root_end_mib))} "
+                      f"mkpart primary {shlex.quote(str(root_end_mib))} {shlex.quote(str(swap_end_mib))} "
+                      f"set {shlex.quote(str(root_number))} bls_boot on "
+                      f"name {shlex.quote(str(root_number))} {shlex.quote("''")} "
+                      f"name {shlex.quote(str(swap_number))} {shlex.quote("''")}"
                   ),
                   dryrun=dryrun,
               )
@@ -585,6 +584,10 @@
                       subprocess_run_wrapper(
                           cmd=f"mkfs.btrfs -d single -m dup {shlex.quote(part)}", dryrun=dryrun
                       )
+                  case "swap":
+                      subprocess_run_wrapper(
+                          cmd=f"mkswap {shlex.quote(part)}", dryrun=dryrun
+                      )
                   case _:
                       logging.error(f"Unsupported parttype {parttype} - exiting")
                       sys.exit(1)
@@ -629,13 +632,13 @@
                   os.rmdir(mountpoint)
           
           
-          def do_write_disk_var_sh(esppart: str, bootpart: str, rootpart: str, bootdev: str):
+          def do_write_disk_var_sh(esppart: str, rootpart: str, swappart: str, bootdev: str):
               disk_var_sh = os.path.join(os.environ["LOGDIR"], "disk_var.sh")
               with open(disk_var_sh, "w") as f:
                   f.write(f'ESP_DEVICE="{esppart}"\n')
-                  f.write(f'BOOT_PARTITION="{bootpart}"\n')
+                  f.write(f'BOOT_PARTITION="{rootpart}"\n')
                   f.write(f'ROOT_PARTITION="{rootpart}"\n')
-                  f.write('SWAPLIST=""\n')
+                  f.write('SWAPLIST="{swappart}"\n')
                   f.write(f'BOOT_DEVICE="{bootdev}"\n')
                   f.write(f'PHYSICAL_BOOT_DEVICES="{bootdev}"\n')
           
@@ -647,16 +650,19 @@
                       f.write(f"luks-{crypt_uuid} UUID={crypt_uuid} none luks,discard\n")
           
           
-          def do_write_fstab(efi_uuid: str, boot_uuid: str, root_uuid: str):
+          def do_write_fstab(efi_uuid: str, root_uuid: str, swap_uuid: str):
               fstab = os.path.join(os.environ["LOGDIR"], "fstab")
               with open(fstab, "w") as f:
                   f.write(
-                      f"UUID={root_uuid} /         btrfs   rw,subvol=os,compress=zstd:1,x-systemd.device-timeout=0,discard=async 0 1\n"
+                      f"UUID={root_uuid} /         btrfs   rw,subvol=os,compress=zstd:1,x-systemd.device-timeout=0,discard=async   0 1\n"
                   )
                   f.write(
-                      f"UUID={boot_uuid} /boot    btrfs   rw,subvol=boot,compress=zstd:1,x-systemd.device-timeout=0,discard=async  0 2\n"
+                      f"UUID={root_uuid} /boot     btrfs   rw,subvol=boot,compress=zstd:1,x-systemd.device-timeout=0,discard=async 0 2\n"
                   )
-                  f.write(f"UUID={efi_uuid} /boot/efi vfat    rw,discard             0 2\n")
+                  f.write(f"UUID={efi_uuid}  /boot/efi vfat    rw,discard                                                              0 2\n")
+                  f.write(
+                      f"UUID={swap_uuid} swap      swap    defaults                                                                0 0\n"
+                  )
           
           
           def get_uuid_of_existing_fs(part: str, dryrun: bool = False) -> str:
@@ -679,11 +685,14 @@
               diskpath: str, diskinfo: dict, disklayout: dict, cryptpw: str, dryrun: bool = False
           ):
               esp_number = disklayout["esp"]["number"]
-              boot_number = disklayout["boot"]["number"]
               root_number = disklayout["root"]["number"]
+              swap_number = disklayout["swap"]["number"]
           
               crypt_root_uuid = do_cryptsetup(
                   partition=f"{diskpath}-part{root_number}", cryptpw=cryptpw, dryrun=dryrun
+              )
+              crypt_swap_uuid = do_cryptsetup(
+                  partition=f"{diskpath}-part{swap_number}", cryptpw=cryptpw, dryrun=dryrun
               )
           
               if disklayout["esp"]["wipe"]:
@@ -695,30 +704,27 @@
                       part=f"{diskpath}-part{esp_number}", dryrun=dryrun
                   )
           
-              boot_uuid = do_mkfs(
-                  part=f"{diskpath}-part{boot_number}", parttype="btrfs", dryrun=dryrun
-              )
               root_uuid = do_mkfs(
                   part=f"/dev/mapper/luks-{crypt_root_uuid}", parttype="btrfs", dryrun=dryrun
               )
+              swap_uuid = do_mkfs(
+                  part=f"/dev/mapper/luks-{crypt_swap_uuid}", parttype="swap", dryrun=dryrun
+              )
           
               do_btrfs_subvols(
-                  part=f"{diskpath}-part{boot_number}", subvolumes=["boot"], dryrun=dryrun
-              )
-              do_btrfs_subvols(
-                  part=f"/dev/mapper/luks-{crypt_root_uuid}", subvolumes=["os"], dryrun=dryrun
+                  part=f"/dev/mapper/luks-{crypt_root_uuid}", subvolumes=["os", "boot"], dryrun=dryrun
               )
           
               do_write_disk_var_sh(
                   esppart=f"{diskpath}-part{esp_number}",
-                  bootpart=f"{diskpath}-part{boot_number}",
                   rootpart=f"/dev/mapper/luks-{crypt_root_uuid}",
+                  swappart=f"/dev/mapper/luks-{crypt_swap_uuid}",
                   bootdev=f"{diskpath}",
               )
           
-              do_write_crypttab(crypt_uuids=[crypt_root_uuid])
+              do_write_crypttab(crypt_uuids=[crypt_root_uuid, crypt_swap_uuid])
           
-              do_write_fstab(efi_uuid=efi_uuid, boot_uuid=boot_uuid, root_uuid=root_uuid)
+              do_write_fstab(efi_uuid=efi_uuid, root_uuid=root_uuid, swap_uuid=swap_uuid)
           
           
           def main():
@@ -734,40 +740,48 @@
               disklayoutid = "{{disklayoutid}}"
               diskpath = "{{diskpath}}"
               startpartition = {{startpartition}}
+              rootnumber = {{rootnumber}}
+              swapnumber = {{swapnumber}}
               rootsizemib = {{rootsizemib}}
+              swapsizemib = {{swapsizemib}}
               cryptpw = False
           
               btrfsrootlabel = "fedora_fedora"
-              btrfsbootlabel = "fedora_boot"
           
               logging.info(f"disklayoutid: {shlex.quote(str(disklayoutid))}")
               logging.info(f"diskpath: {shlex.quote(str(diskpath))}")
               logging.info(f"startpartition: {int(startpartition)}")
+              logging.info(f"rootnumber: {int(rootnumber)}")
+              logging.info(f"swapnumber: {int(swapnumber)}")
               logging.info(f"rootsizemib: {int(rootsizemib)}")
+              logging.info(f"swapsizemib: {int(swapsizemib)}")
               logging.info("cryptpw: hidden")
           
               rootsizemibmin = int(10240)
+              swapsizemibmin = int(8192)
           
               if rootsizemib < rootsizemibmin:
                   logging.error(
                       f"rootsizemib {rootsizemib} < rootsizemibmin {rootsizemibmin} - exiting"
                   )
                   sys.exit(1)
+
+              if swapsizemib < swapsizemibmin:
+                  logging.error(
+                      f"swapsizemib {swapsizemib} < swapsizemibmin {swapsizemibmin} - exiting"
+                  )
+                  sys.exit(1)
           
               disklayouts = {
                   "singleos": {
                       "esp": {"number": 1, "wipe": True, "sizemib": 2047},
-                      "boot": {"number": 2, "wipe": True, "sizemib": rootsizemib},
-                      "root": {"number": 3, "wipe": True, "sizemib": rootsizemib},
+                      "root": {"number": 2, "wipe": True, "sizemib": rootsizemib},
+                      "swap": {"number": 3, "wipe": True, "sizemib": swapsizemib},
                   },
                   "multios": {
                       "esp": {"number": 1, "wipe": False, "sizemib": 2047},
-                      "boot": {"number": int(startpartition), "wipe": True, "sizemib": rootsizemib},
-                      "root": {
-                          "number": int(startpartition) + 1,
-                          "wipe": True,
-                          "sizemib": rootsizemib,
-                      },
+                      "root": {"number": int(rootnumber), "wipe": True, "sizemib": rootsizemib},
+                      "swap": {"number": int(swapnumber), "wipe": True, "sizemib": swapsizemib},
                   },
               }
           
@@ -797,13 +811,13 @@
                           logging.info("Partitioning skipped.")
           
                   case "multios":
-                      if disklayout["boot"]["number"] < 1:
+                      if disklayout["root"]["number"] < 1:
                           logging.error(
-                              f"startpartition/number of boot partition {disklayout['boot']['number']} not set correctly - exiting"
+                              f"startpartition/number of root partition {disklayout['root']['number']} not set correctly - exiting"
                           )
                           sys.exit(1)
           
-                      # check if partition all partition exist, that have a number smaller that boot partition number (example: 1,2,3,4 if boot partition number is 5) if not: exit with error
+                      # check if partition all partition exist, that have a number smaller that root partition number (example: 1,2,3,4 if root partition number is 5) if not: exit with error
           
                       parts_by_no: dict[int, dict] = {}
           
@@ -816,13 +830,13 @@
           
                       missing = [
                           n
-                          for n in range(1, disklayout["boot"]["number"])
+                          for n in range(1, disklayout["root"]["number"])
                           if n not in parts_by_no
                       ]
                       logging.info(f"missing: {missing}")
                       if missing:
                           logging.error(
-                              f"{diskpath}: expected partitions 1-{disklayout['boot']['number'] - 1} to exist, missing: {missing}"
+                              f"{diskpath}: expected partitions 1-{disklayout['root']['number'] - 1} to exist, missing: {missing}"
                           )
                           sys.exit(1)
           
@@ -843,7 +857,7 @@
                           (p1_parttype == ESP_GPT_GUID)
                           or ("efi system" in p1_typename)
                           or ("esp" in p1_flags)
-                          or ("boot" in p1_flags)
+                          or ("root" in p1_flags)
                           or (p1_fstype in ("vfat", "fat", "fat32"))
                       )
                       if not looks_like_esp:
@@ -855,38 +869,38 @@
                           sys.exit(1)
                       logging.info("p1 looks like a EFI partition - continuing")
           
-                      # check if partitions other than larger or equal than boot partition number exist,
+                      # check if partitions other than larger or equal than root partition number exist,
                       extras = sorted(
                           n
                           for n in parts_by_no.keys()
-                          if n not in range(1, disklayout["boot"]["number"])
+                          if n not in range(1, disklayout["root"]["number"])
                       )
                       logging.info(f"extras: {extras}")
-                      # - if yes: do not partition at all, but check if boot partition number  and root partition number exist, if not: exit with error
+                      # - if yes: do not partition at all, but check if root partition number  and swap partition number exist, if not: exit with error
                       if extras:
                           if (
-                              disklayout["boot"]["number"] not in parts_by_no
-                              or disklayout["root"]["number"] not in parts_by_no
+                              disklayout["root"]["number"] not in parts_by_no
+                              or disklayout["swap"]["number"] not in parts_by_no
                           ):
                               logging.error(
-                                  f"{diskpath}: found extra partitions beyond 1-{disklayout['boot']['number'] - 1} ({extras}) "
-                                  f"but required Linux partitions for boot number {disklayout['boot']['number']} and for root number {disklayout['root']['number']} are not both present."
+                                  f"{diskpath}: found extra partitions beyond 1-{disklayout['root']['number'] - 1} ({extras}) "
+                                  f"but required Linux partitions for root number {disklayout['root']['number']} and for swap number {disklayout['swap']['number']} are not both present."
                               )
                               sys.exit(1)
                           logging.info(
-                              f"{diskpath}: partitions beyond 1-{disklayout['boot']['number'] - 1} already exist ({extras}); will not create new partitions."
+                              f"{diskpath}: partitions beyond 1-{disklayout['root']['number'] - 1} already exist ({extras}); will not create new partitions."
                           )
           
-                      # - if no:  create boot and root part at beginning of free space which must begin directly after last part before boot and no other parts until the end of disk
+                      # - if no:  create root and swap part at beginning of free space which must begin directly after last part before root and no other parts until the end of disk
                       else:
-                          required_mib = int(disklayout["boot"]["sizemib"]) + int(
-                              disklayout["root"]["sizemib"]
+                          required_mib = int(disklayout["root"]["sizemib"]) + int(
+                              disklayout["swap"]["sizemib"]
                           )
                           logging.info(f"required_mib: {required_mib}")
                           start_mib, avail_mib = get_start_mib_after_partnumber(
                               diskpath=diskpath,
                               required_mib=required_mib,
-                              partnumber=disklayout["boot"]["number"] - 1,
+                              partnumber=disklayout["root"]["number"] - 1,
                               dryrun=dryrun,
                           )
                           logging.info(f"start_mib: {start_mib}")
@@ -912,7 +926,6 @@
                   write_ks_snippets(
                       diskpath=diskpath,
                       disklayout=disklayout,
-                      btrfsbootlabel=btrfsbootlabel,
                       btrfsrootlabel=btrfsrootlabel,
                   )
               elif fai:
@@ -972,13 +985,13 @@
         {
           // Part 2: root — always wiped and re-encrypted by Agama
           search: { 
-            condition: { number: 2, },
+            condition: { number: {{rootnumber}}, },
             ifNotFound: "error",
           },
           //size: ["current",],         // keep whatever size the partition already has
           encryption: {
             luks2: {
-              password: "hoonetorg",
+              password: "{{cryptpw}}",
             },
           },
 
@@ -995,14 +1008,14 @@
         {
           // Part 3: swap — always wiped and re-encrypted by Agama
           search: { 
-            condition: { number: 3, },
+            condition: { number: {{swapnumber}}, },
             ifNotFound: "error",
           },
 
           //size: ["current",],
           encryption: {
             luks2: {
-              password: "hoonetorg",
+              password: "{{cryptpw}}",
             },
           },
           filesystem: {

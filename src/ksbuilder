@@ -132,10 +132,26 @@ def main() -> None:
     version = str(hostconf["version"])
     username = str(hostconf["username"])
     userpw = str(hostconf["userpw"])
+    cryptpw = str(hostconf.get("cryptpw", None))
     disklayoutid = str(hostconf["disklayoutid"])
     diskpath = Path(hostconf["diskpath"])
     startpartition = int(hostconf.get("startpartition", int(-1)))
-    rootsizemib = int(hostconf["rootsizemib"])
+    
+
+    match disklayoutid:
+        case "singleos":
+            bootnumber = 2
+            rootnumber = 2
+            swapnumber = 3
+
+        case "multios":
+            bootnumber = startpartition
+            rootnumber = startpartition
+            swapnumber = startpartition + 1
+
+    bootsizemib = int(hostconf.get("bootsizemib", 2048))
+    rootsizemib = int(hostconf.get("rootsizemib", 10240))
+    swapsizemib = int(hostconf.get("swapsizemib", 8192))
     outfile = Path(hostconf["outfile"])
 
     outfilefull = outputdir / outfile
@@ -156,10 +172,16 @@ def main() -> None:
     logging.info(f"ksfile: {shlex.quote(str(ksfile))}")
     logging.info(f"username: {str(username)}")
     logging.info("userpw: hidden")
+    logging.info("cryptpw: hidden")
     logging.info(f"disklayoutid: {shlex.quote(str(disklayoutid))}")
     logging.info(f"diskpath: {shlex.quote(str(diskpath))}")
     logging.info(f"startpartition: {int(startpartition)}")
+    logging.info(f"bootnumber: {int(bootnumber)}")
+    logging.info(f"rootnumber: {int(rootnumber)}")
+    logging.info(f"swapnumber: {int(swapnumber)}")
+    logging.info(f"bootsizemib: {int(bootsizemib)}")
     logging.info(f"rootsizemib: {int(rootsizemib)}")
+    logging.info(f"swapsizemib: {int(swapsizemib)}")
     logging.info(f"outfile: {shlex.quote(str(outfile))}")
     logging.info(f"oemlabel: {shlex.quote(str(oemlabel))}")
     logging.info(f"extrafilesdir: {shlex.quote(str(extrafilesdir))}")
@@ -196,11 +218,37 @@ def main() -> None:
     )
     ks_data = replace_token(
         text=ks_data,
+        token="bootnumber",
+        value=int(bootnumber) if bootnumber is not None else None,
+    )
+    ks_data = replace_token(
+        text=ks_data,
+        token="rootnumber",
+        value=int(rootnumber) if rootnumber is not None else None,
+    )
+    ks_data = replace_token(
+        text=ks_data,
+        token="swapnumber",
+        value=int(swapnumber) if swapnumber is not None else None,
+    )
+    ks_data = replace_token(
+        text=ks_data,
+        token="bootsizemib",
+        value=int(bootsizemib) if bootsizemib is not None else None,
+    )
+    ks_data = replace_token(
+        text=ks_data,
         token="rootsizemib",
         value=int(rootsizemib) if rootsizemib is not None else None,
     )
+    ks_data = replace_token(
+        text=ks_data,
+        token="swapsizemib",
+        value=int(swapsizemib) if swapsizemib is not None else None,
+    )
     ks_data = replace_token(text=ks_data, token="username", value=username or None)
     ks_data = replace_token(text=ks_data, token="userpw", value=userpw or None)
+    ks_data = replace_token(text=ks_data, token="cryptpw", value=cryptpw or None)
 
     patched_ks_path.write_text(ks_data, encoding="utf-8")
     ks_to_copy = patched_ks_path

@@ -1,3 +1,4 @@
 ksfiles/*
 !ksfiles/ks*.cfg
+!ksfiles/autoinst*.jsonnet
 helpers/repobldr/Containerfile
